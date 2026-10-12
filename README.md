@@ -145,6 +145,76 @@ erDiagram
 Database-level guarantees: `wallet.balance >= 0`; one `in_progress` session per user (partial unique
 index); `(session, minute_index)` unique; ledger `reference` unique; recharge `reference` unique.
 
+## How it works
+
+```mermaid
+flowchart TD
+    A["Recharge: pending transaction"] --> B["Gateway callback"]
+    B --> C{"Already applied?"}
+    C -- yes --> C1["No-op, credited: false"]
+    C -- no --> D["Wallet credited once + ledger entry"]
+    D --> E["Create session: unassigned"]
+    E --> F["Assign provider"]
+    F --> G["Provider accepts"]
+    G --> H{"Balance >= 5 x rate and no active session?"}
+    H -- no --> H1["400 insufficient_balance / active_session_exists"]
+    H -- yes --> I["Start: freeze rate, charge minute 1"]
+    I --> J["Billing tick"]
+    J --> K{"Wallet covers next owed minute?"}
+    K -- yes --> L["Debit + record minute"]
+    L --> J
+    K -- no --> M["System ends session: insufficient balance"]
+    J --> N["User or provider ends: final billing pass, completed"]
+```
+
+A billing tick computes `minutes_due = max(1, ceil(elapsed / 60))`, then debits each unbilled minute
+in turn. The debit is one conditional `UPDATE ... WHERE balance >= amount`, so the wallet cannot go
+negative. The first unpayable minute ends the session at the paid boundary. Ticking twice, late, or
+in parallel never charges a minute twice.
+
+## Functionality
+
+| Area | What it does | Rule enforced |
+|---|---|---|
+| Accounts | Register as `USER` or `PROVIDER`, token login, list providers | Providers must have a rate |
+| Wallet | View balance | Never negative (code guard + DB `CHECK`) |
+| Recharge | Initiate, then complete via mock gateway callback | Same callback twice credits once; conflicting callback is 409 |
+| Sessions | Create, assign, accept, start, end, cancel | Invalid transition is 400; wrong person is 403 |
+| Start | Begin the paid session | Balance >= 5 x rate; one `in_progress` session per user; rate frozen; minute 1 charged |
+| Billing | `bill` endpoint or `bill_active_sessions` command | Each started minute charged once; late ticks catch up |
+| Auto-end | Part of every tick | `system: Insufficient Balance`, wallet untouched, talk time saved |
+| Audit | Ledger entry per money movement, row per billed minute | Unique keys make a duplicate movement impossible |
+
+## Testing guide
+
+Automated: see "Run the tests" above (55 tests; run once on PostgreSQL to include the concurrency tests).
+
+Manual checks (with the playground below, or `curl`):
+
+| Do this | Expect |
+|---|---|
+| Fund 200, try to start at 50/min | 400 `insufficient_balance` (needs 250) |
+| Fund 290 and start | `in_progress`, balance 240, 1 minute billed |
+| Jump 3 minutes, bill three times in a row | Only the first bill charges |
+| Jump 60 minutes, run a tick | `completed`, ended by `system`, 5 minutes billed, wallet 40 |
+| Send the same success callback twice | Credited once (`credited: false` the second time) |
+| Wrong secret / `failed` after `success` | 403 / 409 |
+| End a session that never started | 400 `invalid_transition` |
+| Act as another user on someone's session | 403 |
+| Start a second session while one is running | 400 `active_session_exists` |
+
+After any experiment, the sum of ledger entries per wallet must equal that wallet's balance.
+
+## Local playground (optional, dev only)
+
+`playground.html`, `chat.html` and `playground.py` sit next to `manage.py` and are served at
+`/play/` when `DEBUG` is on. `config/urls.py` loads `playground.py` if it exists. They give you
+account switching, a mock gateway, a time machine, database tables, a request log, and a pop-up
+test chat (`/play/chat/`, opened by the "Open chat" button). Chat messages live in the browser's
+`localStorage` only; billing calls are real. **Delete these three files and revert the hook in
+`config/urls.py` before submitting.** They include endpoints that wipe data and rewrite session
+start times.
+
 ## Layout
 
 ```
@@ -153,4 +223,5 @@ wallet/          Wallet, RechargeTransaction, LedgerEntry; services.py is the on
 consultations/   Session, SessionBilling; services.py = state machine + billing; management command
 common/          domain exceptions + DRF error handler
 tests/           required scenarios, wallet, state machine, billing, accounts, concurrency
+playground.*, chat.html   optional dev-only UI (see above)
 ```

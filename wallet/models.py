@@ -11,15 +11,21 @@ def generate_reference():
 
 
 class Wallet(models.Model):
-    user = models.OneToOneField(settings.AUTH_USER_MODEL, on_delete=models.CASCADE, related_name="wallet")
-    balance = models.DecimalField(max_digits=12, decimal_places=2, default=Decimal("0.00"))
+    user = models.OneToOneField(
+        settings.AUTH_USER_MODEL, on_delete=models.CASCADE, related_name="wallet"
+    )
+    balance = models.DecimalField(
+        max_digits=12, decimal_places=2, default=Decimal("0.00")
+    )
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
 
     class Meta:
         constraints = [
             # Last line of defence: the database itself refuses a negative balance.
-            models.CheckConstraint(condition=Q(balance__gte=0), name="wallet_balance_non_negative"),
+            models.CheckConstraint(
+                condition=Q(balance__gte=0), name="wallet_balance_non_negative"
+            ),
         ]
 
     def __str__(self):
@@ -32,16 +38,22 @@ class RechargeTransaction(models.Model):
         SUCCESS = "success"
         FAILED = "failed"
 
-    user = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.PROTECT, related_name="recharges")
+    user = models.ForeignKey(
+        settings.AUTH_USER_MODEL, on_delete=models.PROTECT, related_name="recharges"
+    )
     amount = models.DecimalField(max_digits=12, decimal_places=2)
     reference = models.CharField(max_length=64, unique=True, default=generate_reference)
-    status = models.CharField(max_length=10, choices=Status.choices, default=Status.PENDING)
+    status = models.CharField(
+        max_length=10, choices=Status.choices, default=Status.PENDING
+    )
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
 
     class Meta:
         constraints = [
-            models.CheckConstraint(condition=Q(amount__gt=0), name="recharge_amount_positive"),
+            models.CheckConstraint(
+                condition=Q(amount__gt=0), name="recharge_amount_positive"
+            ),
         ]
 
 
@@ -53,7 +65,9 @@ class LedgerEntry(models.Model):
         SESSION_DEBIT = "session_debit"
 
     wallet = models.ForeignKey(Wallet, on_delete=models.PROTECT, related_name="entries")
-    amount = models.DecimalField(max_digits=12, decimal_places=2)  # signed: + credit, - debit
+    amount = models.DecimalField(
+        max_digits=12, decimal_places=2
+    )  # signed: + credit, - debit
     kind = models.CharField(max_length=20, choices=Kind.choices)
     reference = models.CharField(max_length=100, unique=True)
     balance_after = models.DecimalField(max_digits=12, decimal_places=2)

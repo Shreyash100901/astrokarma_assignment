@@ -17,13 +17,18 @@ class RegisterView(APIView):
         user = serializer.save()
         token = Token.objects.create(user=user)
         return Response(
-            {"id": user.id, "username": user.username, "role": user.role, "token": token.key},
+            {
+                "id": user.id,
+                "username": user.username,
+                "role": user.role,
+                "token": token.key,
+            },
             status=201,
         )
 
 
 class ProviderListView(APIView):
-    """Lets a user discover provider ids (and rates) to assign a session to."""
+    """User can see the providers and their rates so that they can choose who to start a session with."""
 
     def get(self, request):
         providers = User.objects.filter(

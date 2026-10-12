@@ -1,0 +1,205 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Billing playground</title>
+<style>
+:root{--paper:#eceee7;--card:#f8f9f4;--ink:#1d2733;--rule:#c8cec1;--dim:#68736b;--teal:#0f6b66;--red:#b3261e;--amber:#92620a}
+*{box-sizing:border-box}
+body{margin:0;background:var(--paper);color:var(--ink);font:15px/1.45 system-ui,sans-serif}
+header{display:flex;gap:14px;align-items:center;flex-wrap:wrap;padding:12px 18px;border-bottom:2px solid var(--ink)}
+h1{font:700 22px Georgia,serif;margin:0 8px 0 0}
+h2{font:700 17px Georgia,serif;margin:0 0 8px}
+main{display:grid;grid-template-columns:repeat(auto-fit,minmax(360px,1fr));gap:14px;padding:14px 18px}
+section{background:var(--card);border:1px solid var(--rule);border-top:3px solid var(--ink);padding:12px 14px;min-width:0}
+.wide{grid-column:1/-1}
+button,input,select{font:inherit;color:var(--ink);background:#fff;border:1px solid var(--ink);border-radius:2px;padding:4px 9px}
+button{cursor:pointer}button:hover{background:#e3e8dd}
+button.go{background:var(--teal);border-color:var(--teal);color:#fff}
+:focus-visible{outline:3px solid var(--amber);outline-offset:1px}
+.row{display:flex;gap:6px;flex-wrap:wrap;align-items:center;margin:7px 0}
+.chip{padding:3px 11px;border:1px solid var(--rule);background:#fff;cursor:pointer}
+.chip.on{background:var(--ink);color:#fff;border-color:var(--ink)}.chip.off{opacity:.55}
+.rail{display:flex;flex-wrap:wrap;gap:0;margin:8px 0}
+.rail span{padding:4px 10px;border:1px solid var(--rule);margin-right:-1px;color:var(--dim)}
+.rail span.on{background:var(--teal);color:#fff;border-color:var(--teal);font-weight:700}
+table{border-collapse:collapse;width:100%}td,th{border-bottom:1px solid var(--rule);padding:3px 8px 3px 0;text-align:left;white-space:nowrap;font-variant-numeric:tabular-nums}
+th{font-weight:600;color:var(--dim)}
+.sc{overflow:auto;max-height:250px}
+.big{font:700 34px Georgia,serif;font-variant-numeric:tabular-nums}
+.ok{color:var(--teal)}.bad{color:var(--red)}.dim{color:var(--dim)}
+#msg{padding:7px 18px;border-bottom:1px solid var(--rule);min-height:34px;background:var(--card)}
+details{border-bottom:1px solid var(--rule);padding:3px 0}summary{cursor:pointer}
+pre{margin:4px 0;white-space:pre-wrap;word-break:break-all;font:12px ui-monospace,Menlo,monospace;color:var(--dim)}
+</style></head><body>
+<header><h1>Billing playground</h1>
+<button id="seed" class="go">Seed demo accounts</button>
+<label><input type="checkbox" id="auto"> Run billing tick every 5 s</label>
+<button id="reset">Wipe all data</button><span id="inv"></span><span class="dim" id="clock"></span></header>
+<div id="msg" class="dim">Seed the demo accounts, then pick who you are acting as.</div>
+<main>
+<section><h2>Accounts</h2><div class="dim">Click an account to act as it. Try acting as the wrong person to see 403s.</div>
+<div id="chips" class="row"></div>
+<div class="row"><input id="ru" placeholder="username" size="9"><select id="rr"><option>USER</option><option>PROVIDER</option></select><input id="rt" placeholder="₹/min" size="6"><button id="reg">Register</button></div></section>
+
+<section><h2>Wallet and mock gateway</h2><div id="wal"></div>
+<div class="row"><input id="amt" value="300" size="6"><button id="rch">Start recharge</button><button id="fund" class="go">Recharge and confirm</button></div>
+<div class="dim">Send “success” twice on one recharge: credited once.</div><div class="sc" id="rcs"></div></section>
+
+<section><h2>Session</h2>
+<div class="row"><select id="ss"></select><button data-a="create" class="go">New session</button></div>
+<div class="rail" id="flow"></div>
+<div class="row"><select id="pp"></select><button data-a="assign">Assign</button><button data-a="accept">Accept</button><button data-a="start">Start</button><button data-a="end">End</button><button data-a="cancel">Cancel</button><button data-a="bill">Bill now</button></div>
+<div id="sd"></div></section>
+
+<section><h2>Time machine</h2>
+<div class="dim">Nothing is charged until a bill runs. Jump the clock, then bill.</div>
+<div class="row"><button data-tt="1">+1 min</button><button data-tt="3">+3 min</button><button data-tt="10">+10 min</button><button data-tt="60">+60 min</button><button id="tick" class="go">Bill all sessions</button></div>
+<div class="row">Rate of the provider selected in Session:<input id="nr" size="5" value="100"><button id="rate">Change rate</button></div>
+<div class="dim">A running session keeps the rate it started with.</div></section>
+
+<section class="wide"><h2>Database</h2>
+<div class="row" id="tabs"></div><div class="sc" id="tv"></div></section>
+<section class="wide"><h2>Request log</h2><div class="sc" id="log"></div></section>
+</main>
+<script>
+const $ = s => document.querySelector(s);
+const API_BASE = "http://127.0.0.1:8000";
+const apiUrl = path => `${API_BASE}${path.startsWith("/") ? path : "/" + path}`;
+const PW = "pw-12345678";
+const SEC = "dev-webhook-secret";
+
+let S={users:[],wallets:[],sessions:[],recharges:[],ledger:[],billings:[]},
+    acc=JSON.parse(localStorage.acc||'{}'),me=localStorage.me||'',sid=null,off=0,tab='ledger',LOG=[];
+
+const esc=v=>String(v??'').replace(/[&<>]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;'}[c]));
+const val=v=>v===''||v==null?'—':v;
+const save=()=>{localStorage.acc=JSON.stringify(acc);localStorage.me=me};
+
+function tbl(rows){
+  if(!rows.length)return'<span class="dim">Nothing here yet.</span>';
+  const ks=Object.keys(rows[0]);
+  return'<table><tr>'+ks.map(k=>`<th>${k}</th>`).join('')+'</tr>'+
+    rows.map(r=>'<tr>'+ks.map(k=>`<td>${k=='act'?r[k]:esc(val(r[k]))}</td>`).join('')+'</tr>').join('')+'</table>';
+}
+
+async function call(m,p,b,as=me,h={}){
+  const hd={'Content-Type':'application/json',...h};
+  if(acc[as])hd.Authorization='Token '+acc[as].token;
+  const url=apiUrl(p),t=performance.now();
+  let r;
+  try{
+    r=await fetch(url,{method:m,headers:hd,body:b?JSON.stringify(b):undefined});
+  }catch(err){
+    LOG.unshift({m,p:url,as:acc[as]?as:'no login',b,s:0,j:{error:err.message},ms:Math.round(performance.now()-t)});
+    LOG.length=Math.min(LOG.length,60);
+    $('#msg').className='bad';
+    $('#msg').textContent=`Request failed: ${url}. Check that Django is running and CORS is configured.`;
+    render();
+    return{ok:false,j:{error:err.message}};
+  }
+  let j=null;try{j=await r.json()}catch(e){}
+  LOG.unshift({m,p:url,as:acc[as]?as:'no login',b,s:r.status,j,ms:Math.round(performance.now()-t)});
+  LOG.length=Math.min(LOG.length,60);
+  $('#msg').className=r.ok?'ok':'bad';
+  $('#msg').textContent=r.ok?`${r.status} ${m} ${url}`:`${r.status} ${m} ${url}: ${(j&&(j.code?j.code+' – ':'')+(j.error||j.detail))||'failed'}`;
+  await refresh();
+  return{ok:r.ok,j};
+}
+
+async function refresh(){
+  try{
+    const response=await fetch(apiUrl('/play/api/state/'));
+    if(!response.ok)throw new Error(`State endpoint returned ${response.status}`);
+    S=await response.json();
+    off=new Date(S.now)-Date.now();
+    if(!S.sessions.find(s=>s.id==sid))sid=S.sessions.length?S.sessions[S.sessions.length-1].id:null;
+    render();
+  }catch(err){
+    $('#msg').className='bad';
+    $('#msg').textContent=`Cannot load ${apiUrl('/play/api/state/')}. Is Django running and CORS configured? (${err.message})`;
+  }
+}
+
+function live(){
+  const s=S.sessions.find(s=>s.id==sid);
+  $('#flow').innerHTML=['unassigned','assigned','accepted_by_provider','in_progress','completed','cancelled'].map(x=>`<span class="${s&&s.status==x?'on':''}">${x}</span>`).join('');
+  let x='';
+  if(s&&s.status=='in_progress'){
+    const el=(Date.now()+off-new Date(s.started_at))/1000,due=Math.max(1,Math.ceil(el/60)),un=due-s.billed_minutes;
+    x=`<tr><td class="dim">elapsed</td><td>${Math.floor(el)} s</td></tr><tr><td class="dim">minutes owed now</td><td>${due} <b class="${un?'bad':'ok'}">(${un} not yet billed)</b></td></tr>`;
+  }
+  $('#sd').innerHTML=s?'<table>'+['user','provider','per_minute_cost','started_at','ended_at','billed_minutes','billed_amount','talk_seconds','ended_by','end_reason'].map(k=>`<tr><td class="dim">${k}</td><td>${esc(val(s[k]))}</td></tr>`).join('')+x+'</table>':'<span class="dim">Create a session to begin.</span>';
+}
+
+function render(){
+  if(S.now)$('#clock').textContent='server time '+S.now.slice(11,19)+' UTC';
+  $('#chips').innerHTML=S.users.map(u=>`<span class="chip ${u.username==me?'on':''} ${acc[u.username]?'':'off'}" data-u="${esc(u.username)}">${esc(u.username)} <small>${u.role.toLowerCase()}${u.rate?' ₹'+u.rate+'/min':''}</small></span>`).join('')||'<span class="dim">No accounts yet.</span>';
+  const w=S.wallets.find(w=>w.user==me);
+  $('#wal').innerHTML=me?`<div class="big">₹${w?w.balance:'0.00'}</div><div class="dim">${esc(me)}’s balance</div>`:'<span class="dim">Pick an account.</span>';
+  $('#rcs').innerHTML=tbl(S.recharges.filter(r=>r.user==me).map(r=>({reference:r.reference.slice(0,14),amount:r.amount,status:r.status,act:['success','failed','bad'].map(k=>`<button data-cb="${k}" data-ref="${r.reference}">${k=='bad'?'wrong secret':k}</button>`).join(' ')})));
+  $('#ss').innerHTML=S.sessions.map(s=>`<option value="${s.id}" ${s.id==sid?'selected':''}>#${s.id} ${s.status} (${esc(s.user)}${s.provider?' → '+esc(s.provider):''})</option>`).join('')||'<option value="">no sessions</option>';
+  $('#pp').innerHTML=S.users.filter(u=>u.role=='PROVIDER').map(u=>`<option value="${u.id}">${esc(u.username)}</option>`).join('');
+  $('#tabs').innerHTML=['ledger','billings','wallets','sessions','recharges'].map(t=>`<span class="chip ${t==tab?'on':''}" data-t="${t}">${t}</span>`).join('');
+  $('#tv').innerHTML=tbl(S[tab]||[]);
+  const bad=S.wallets.filter(w=>Number(w.balance)!=Number(w.ledger_sum));
+  $('#inv').innerHTML=bad.length?'<b class="bad">Ledger and balances disagree</b>':'<b class="ok">Ledger matches every balance</b>';
+  $('#log').innerHTML=LOG.map(e=>`<details><summary><b class="${e.s>0&&e.s<300?'ok':'bad'}">${e.s}</b> ${e.m} ${esc(e.p)} <span class="dim">as ${esc(e.as)}, ${e.ms} ms</span></summary><pre>${esc(e.b?JSON.stringify(e.b):'')}\n${esc(JSON.stringify(e.j,null,1))}</pre></details>`).join('')||'<span class="dim">Every request you send appears here.</span>';
+  live();
+}
+
+async function login(u){
+  const r=await call('POST','/api/auth/token/',{username:u,password:PW},'');
+  if(r.ok){acc[u]={token:r.j.token};me=u;save();render();}
+}
+async function register(u,role,rate){
+  const b={username:u,password:PW,role};
+  if(role=='PROVIDER')b.per_minute_rate=rate||'50';
+  const r=await call('POST','/api/auth/register/',b,'');
+  if(r.ok){acc[u]={token:r.j.token};me=u;save();render();}
+  else await login(u);
+}
+
+document.addEventListener('click',async e=>{
+  const g=a=>e.target.closest(`[${a}]`);let x;
+  if(x=g('data-u')){
+    const u=x.dataset.u;
+    if(acc[u]){me=u;save();render()}else await login(u);
+  }else if(x=g('data-t')){tab=x.dataset.t;render();}
+  else if(x=g('data-cb')){
+    const k=x.dataset.cb;
+    await call('POST','/api/wallet/recharge/callback/',{reference:x.dataset.ref,status:k=='bad'?'success':k},'',{'X-Webhook-Secret':k=='bad'?'wrong':SEC});
+  }else if(x=g('data-tt'))await call('POST','/play/api/time-travel/',{session_id:sid,minutes:+x.dataset.tt},'');
+  else if(x=g('data-a')){
+    const a=x.dataset.a;
+    if(a=='create'){
+      const r=await call('POST','/api/sessions/');
+      if(r.ok){sid=r.j.id;render();}
+    }else if(sid==null){
+      $('#msg').className='bad';$('#msg').textContent='Create or select a session first.';
+    }else if(a=='assign')await call('POST',`/api/sessions/${sid}/assign/`,{provider_id:+$('#pp').value});
+    else await call('POST',`/api/sessions/${sid}/${a}/`);
+  }
+});
+
+$('#ss').onchange=e=>{sid=+e.target.value;render();};
+$('#reg').onclick=()=>register($('#ru').value.trim(),$('#rr').value,$('#rt').value);
+$('#seed').onclick=async()=>{
+  for(const[u,r,t]of[['asha','USER'],['mallory','USER'],['guruji','PROVIDER','50'],['astro2','PROVIDER','80']])await register(u,r,t);
+  me='asha';save();render();
+};
+$('#rch').onclick=()=>call('POST','/api/wallet/recharge/',{amount:$('#amt').value});
+$('#fund').onclick=async()=>{
+  const r=await call('POST','/api/wallet/recharge/',{amount:$('#amt').value});
+  if(r.ok)await call('POST','/api/wallet/recharge/callback/',{reference:r.j.reference,status:'success'},'',{'X-Webhook-Secret':SEC});
+};
+$('#tick').onclick=()=>call('POST','/play/api/bill-all/',{},'');
+$('#rate').onclick=()=>call('POST','/play/api/set-rate/',{user_id:+$('#pp').value,rate:$('#nr').value},'');
+$('#reset').onclick=async()=>{
+  if(confirm('Delete every user, wallet and session in the dev database?')){
+    await call('POST','/play/api/reset/',{},'');acc={};me='';save();render();
+  }
+};
+setInterval(()=>$('#auto').checked&&call('POST','/play/api/bill-all/',{},''),5000);
+setInterval(refresh,4000);
+setInterval(live,1000);
+refresh();
+</script></body></html>

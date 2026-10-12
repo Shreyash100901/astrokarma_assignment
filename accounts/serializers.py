@@ -18,16 +18,22 @@ class RegisterSerializer(serializers.Serializer):
 
     def validate_username(self, value):
         if User.objects.filter(username__iexact=value).exists():
-            raise serializers.ValidationError("A user with this username already exists.")
+            raise serializers.ValidationError(
+                "A user with this username already exists."
+            )
         return value
 
     def validate(self, attrs):
         is_provider = attrs["role"] == User.Role.PROVIDER
         has_rate = "per_minute_rate" in attrs
         if is_provider and not has_rate:
-            raise serializers.ValidationError({"per_minute_rate": "Required for providers."})
+            raise serializers.ValidationError(
+                {"per_minute_rate": "Required for providers."}
+            )
         if not is_provider and has_rate:
-            raise serializers.ValidationError({"per_minute_rate": "Only valid for providers."})
+            raise serializers.ValidationError(
+                {"per_minute_rate": "Only valid for providers."}
+            )
         return attrs
 
     @transaction.atomic
